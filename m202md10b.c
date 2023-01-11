@@ -1372,7 +1372,7 @@ int CommandLineHelp(CommandLine *cl, unsigned char send_cmd)
 		"--help    Help long option usage.\n"
 		"-         Read from stdin and send to display\n"
 		"--        End option.\n"
-		"          (*) default."
+		"          (*) default.\n"
 	);
 	return 0;
 }
@@ -1423,7 +1423,7 @@ int CommandLineHelpLong(CommandLine *cl, unsigned char send_cmd)
 		"-H                             Print short help message.\n"
 		"-                              Read from stdin and send to display.\n"
 		"--                             End option.\n"
-		"                               (*) default."
+		"                               (*) default.\n"
 	);
 	return 0;
 }
