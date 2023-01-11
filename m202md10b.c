@@ -12,8 +12,12 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
+#if (defined(__linux__))
+#include <linux/serial.h>
+#endif /* (defined(__linux__)) */
 
 #define	INVALID_FD	(-1)
+
 #define ARRAY_SIZE(a)	(sizeof(a) / sizeof(a)[0])
 
 #if (!defined(PAGE_SIZE))
@@ -25,8 +29,15 @@
 typedef	struct {
 	char		*Path;		/*!< port path.	*/
 	int		Fd;		/*!< port file descriptor. */
+	long		Baud;		/*!< baud configured. */
 	struct termios	TermiosSave;	/*!< saved termio configuration. */
 	struct termios	TermiosCur;	/*!< current termio configuration. */
+#if (defined(ASYNC_CLOSING_WAIT_NONE))
+	int		SstValid;	/*!< Is valid serial line information. */
+	struct serial_struct	Sst;	/*!< serial line information. */
+#endif /* (defined(ASYNC_CLOSING_WAIT_NONE)) */
+	int64_t		WriteTime;	/*!< */
+	ssize_t		WriteBytes;	/*!< */
 	struct timespec	CharWait;	/*!< Wait Time per character. */
 } PortM202MD10B;
 
@@ -36,6 +47,8 @@ typedef enum {
 } ArgStates;
 
 typedef struct {
+#define	CL_DEBUG_VERBOSE	(0x00000001)
+	unsigned int	Debug;
 	int		Argc0;
 	char		**Argv0;
 	int		Argc;
@@ -54,7 +67,6 @@ typedef struct {
 	ArgStates	AState;
 	const char	*Path;
 	long		Baud;
-	speed_t		stBaud;
 	int		RtsCts;
 	int		CWaitMs;
 	PortM202MD10B	Port;
@@ -62,10 +74,58 @@ typedef struct {
 
 CommandLine	CLine;
 
+#define	fprintfDebug(filp, fmt, ...) \
+	do { \
+		if (CLine.Debug & CL_DEBUG_VERBOSE) { \
+			fprintf(filp, fmt, __VA_ARGS__); \
+		} \
+	} while (0)
+
+
+int64_t	TimeSpecToNs(struct timespec *ts)
+{	int64_t		ns;
+
+	if (ts == NULL) {
+		return 0;
+	}
+
+	ns =  (ts->tv_sec) * (int64_t)1000 * 1000 * 1000;
+	ns += (ts->tv_nsec);
+
+	return ns;
+}
+
+int64_t	NowNs(void)
+{	struct timespec ts;
+	int64_t		ns;
+
+	memset(&ts, 0, sizeof(ts));
+
+	if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+		time(&ts.tv_sec);
+		ts.tv_nsec = 0;
+	}
+
+	ns = TimeSpecToNs(&ts);
+	return ns;
+}
+
+
 #define	M202MD10B_BAUD_MIN	(1200)
 #define	M202MD10B_MAUD_MAX	(9600)
 #define	M202MD10B_BAUD_DEF	(2400)
 #define	M202MD10B_BAUD_DEF_ST	(B2400)
+#define	M202MD10B_CHAR_FRAME	(10)
+
+/* Note: Round Up remainder */
+int64_t	DurationNsAtCharsBaud(ssize_t len, long baud)
+{	return ((len * (int64_t)M202MD10B_CHAR_FRAME * 1000 * 1000 * 1000) + (baud - 1)) / baud;
+}
+
+/* Note: Truncate remainder */
+ssize_t	CharsAtDurationNsBaud(int64_t ns, long baud)
+{	return ((ns * baud) / ((int64_t)M202MD10B_CHAR_FRAME * 1000 * 1000 * 1000));
+}
 
 typedef	struct {
 	long	Baud;
@@ -139,12 +199,83 @@ int SpeedTIsM202(speed_t stVal)
 	return 0;
 }
 
+void termiosShow(const struct termios *tm, const char *tag)
+{
+#if (defined(__CYGWIN__))
+	fprintfDebug(stderr, "%s-1: c_iflag=0x%.8x, c_oflag=0x%.8x\n",
+		tag, tm->c_iflag, tm->c_oflag
+	);
+	fprintfDebug(stderr, "%s-2: c_cflag=0x%.8x, c_lflag=0x%.8x\n",
+		tag, tm->c_cflag, tm->c_lflag
+	);
+	fprintfDebug(stderr, "%s-3: c_line=0x%.2x\n",
+		tag, tm->c_line
+	);
+	fprintfDebug(stderr, "%s-4: c_ispeed=0x%.8x, c_ospeed=0x%.8x\n",
+		tag, tm->c_ispeed, tm->c_ospeed
+	);
+#endif /* (defined(__CYGWIN__)) */
+}
+
 /*! Init serial port context.
  */
 int PortM202MD10BInit(PortM202MD10B *p)
 {	memset(p, 0, sizeof(*p));
 	p->Fd = INVALID_FD;
 	return 1;
+}
+
+int PortM202MD10BUpdateTimer(PortM202MD10B *p, ssize_t len)
+{	int64_t		dt;
+	int64_t		tnow;
+	ssize_t		sent_max;
+	ssize_t		remain;
+
+	tnow = NowNs();
+	dt = tnow - p->WriteTime;
+	remain = p->WriteBytes;
+	if (dt > 0) {
+		sent_max = CharsAtDurationNsBaud(dt, p->Baud);
+		remain -= sent_max;
+		if (remain < 0) {
+			remain = 0;
+		}
+	}
+
+	p->WriteTime = tnow;
+	p->WriteBytes = remain + len;
+	return 1;
+}
+
+int PortM202MD10BWaitRemains(PortM202MD10B *p)
+{	int64_t		tw = 0;
+	lldiv_t		qr;
+	struct timespec	ts;
+	int		result = 1;
+
+	PortM202MD10BUpdateTimer(p, 0);
+
+	if (p->Baud) {
+		tw = DurationNsAtCharsBaud(p->WriteBytes, p->Baud);
+	}
+
+	if (tw == 0) {
+		return result;
+	}
+
+	qr = lldiv(tw, (long long)1000 * 1000 * 1000);
+
+	ts.tv_sec = qr.quot;
+	ts.tv_nsec = qr.rem;
+	if (nanosleep(&ts, NULL)) {
+		fprintf(stderr, "%s: nanosleep(): ts=%lld%.9ld, %s(%d).\n",
+			*(CLine.Argv0),
+			(long long)(ts.tv_sec), ts.tv_nsec,
+			strerror(errno), errno
+		);
+		result = 0;
+	}
+	return result;
 }
 
 /*! Close serial port.
@@ -155,13 +286,20 @@ int PortM202MD10BClose(PortM202MD10B *p)
 	if (p->Fd != INVALID_FD) {
 		/* opened. */
 		/* Restore Terminal configuration. */
-		if (tcsetattr(p->Fd, TCSANOW, &(p->TermiosSave)) != 0) {
+		fprintfDebug(stderr, "%s: Close port. Fd=%d\n",
+			p->Path, p->Fd
+		);
+		PortM202MD10BUpdateTimer(p, 0);
+		if (fsync(p->Fd) != 0) {
 			fprintf(stderr,
-				"%s: Can not restore configuration. %s(%d).\n",
+				"%s: Can not flush. %s(%d).\n",
 				p->Path,
 				strerror(errno),
 				errno
 			);
+			ret = 0;
+		}
+		if (!PortM202MD10BWaitRemains(p)) {
 			ret = 0;
 		}
 		if (close(p->Fd) != 0) {
@@ -203,7 +341,7 @@ int PortM202MD10BOpen(PortM202MD10B *p, const char *Path)
 		return 0;
 	}
 
-	fd = open(Path, O_RDONLY,0);
+	fd = open(Path, O_RDWR, 0);
 	if (fd < 0) {
 		fprintf(stderr,"%s: Can not open.%s(%d).\n",
 			p->Path,
@@ -213,8 +351,28 @@ int PortM202MD10BOpen(PortM202MD10B *p, const char *Path)
 		goto out_err_open;
 	}
 	p->Fd = fd;
-	if (tcgetattr(p->Fd, &(p->TermiosSave)) != 0) {
-		 fprintf(stderr,
+	fprintfDebug(stderr, "%s: Open port. Fd=%d\n",
+		Path, fd
+	);
+
+#if (defined(ASYNC_CLOSING_WAIT_NONE))
+	p->SstValid = 1;
+	if (ioctl(fd, TIOCGSERIAL, &(p->Sst)) != 0) {
+		fprintf(stderr,
+			"%s: Can not get terminal information. %s(%d).\n",
+			p->Path,
+			strerror(errno),
+			errno
+		);
+		p->SstValid = 0;
+		/* Anyway, continue. */
+	}
+#endif /* (defined(ASYNC_CLOSING_WAIT_NONE)) */
+
+	PortM202MD10BUpdateTimer(p, 0);
+
+	if (tcgetattr(p->Fd, &(p->TermiosCur)) != 0) {
+		fprintf(stderr,
 			"%s: Can not get terminal configuration. %s(%d).\n",
 			p->Path,
 			strerror(errno),
@@ -222,10 +380,7 @@ int PortM202MD10BOpen(PortM202MD10B *p, const char *Path)
 		);
 		goto out_err_getattr;
 	}
-	memcpy(&(p->TermiosCur),
-		&(p->TermiosSave),
-		sizeof(p->TermiosCur)
-	);
+	memcpy(&(p->TermiosSave), &(p->TermiosCur), sizeof(p->TermiosSave));
 	return 1;
 
 out_err_getattr:
@@ -238,25 +393,65 @@ out_err_open:
 
 /*! Configure serial port.
 */
-int PortM202MD10BConfig(PortM202MD10B *p, speed_t stVal, int rtscts, long ch_wait_ms)
+int PortM202MD10BConfig(PortM202MD10B *p, long baud, int rtscts, long ch_wait_ms)
 {	int	ret;
+	speed_t	st_baud;
+	int	valid = 0;
 	ldiv_t	qr;
 
 	ret = 1;
-	cfmakeraw(&(p->TermiosCur));
-	if (cfsetispeed(&(p->TermiosCur), stVal) != 0) {
+	if (CLine.Debug & CL_DEBUG_VERBOSE) {
+		termiosShow(&(p->TermiosCur), "TermiosCur:Org");
+	}
+
+	st_baud = BaudToSpeedT(baud, &valid);
+	if (!valid) {
 		fprintf(stderr,
-			"%s: Can not set input speed. %s(%d).\n",
-			p->Path,
-			strerror(errno),
-			errno
+			"%s: Invalid baud rate. baud=%ld\n",
+			p->Path, baud
 		);
 		return 0;
 	}
 
-	if (cfsetospeed(&(p->TermiosCur), stVal) != 0) {
+	switch (st_baud) {
+	case B1200:
+	case B2400:
+	case B4800:
+	case B9600:
+		break;
+	default:
+		fprintf(stderr, "%s: Baud ratio is not match to 1200, 2400, 4800, or 9600.\n",
+			p->Path
+		);
+		return 0;
+	}
+
+	p->Baud = baud;
+
+#if (defined(ASYNC_CLOSING_WAIT_NONE))
+	if (p->SstValid) {
+		if ((p->Sst.closing_wait == 0) ||
+		    (p->Sst.closing_wait == ASYNC_CLOSING_WAIT_NONE)) {
+			/* Do not wait at closing. */
+			/* Set "wait a little", also wait until drained all character(s) in buffer. */
+			p->Sst.closing_wait = 1;
+		}
+		if (ioctl(p->Fd, TIOCSSERIAL, &(p->Sst)) != 0) {
+			fprintf(stderr,
+				"%s: Can not set terminal information. %s(%d).\n",
+				p->Path,
+				strerror(errno),
+				errno
+			);
+		}
+	}
+#endif /* (defined(ASYNC_CLOSING_WAIT_NONE)) */
+
+	cfmakeraw(&(p->TermiosCur));
+
+	if (cfsetspeed(&(p->TermiosCur), st_baud) != 0) {
 		fprintf(stderr,
-			"%s: Can not set output speed. %s(%d).\n",
+			"%s: Can not set speed. %s(%d).\n",
 			p->Path,
 			strerror(errno),
 			errno
@@ -279,16 +474,30 @@ int PortM202MD10BConfig(PortM202MD10B *p, speed_t stVal, int rtscts, long ch_wai
 	/* disable output processing */
 	p->TermiosCur.c_oflag &= ~(OPOST | OLCUC | ONLCR | OCRNL | ONOCR | OFILL);
 
-
-	if (tcsetattr(p->Fd, TCSANOW, &(p->TermiosCur)) != 0) {
-		fprintf(stderr,
-		"%s: Can not set configuration. %s(%d).\n",
-			p->Path,
-			strerror(errno),
-			errno
-		);
-		ret = 0;
+	if (CLine.Debug & CL_DEBUG_VERBOSE) {
+		termiosShow(&(p->TermiosCur), "TermiosCur:Cfg");
 	}
+
+	if (memcmp(&(p->TermiosSave), &(p->TermiosCur), sizeof(p->TermiosSave)) != 0) {
+		if (tcsetattr(p->Fd, TCSADRAIN, &(p->TermiosCur)) != 0) {
+			fprintf(stderr,
+				"%s: Can not set configuration. %s(%d).\n",
+				p->Path,
+				strerror(errno),
+				errno
+			);
+			ret = 0;
+		}
+	} else {
+		if (CLine.Debug & CL_DEBUG_VERBOSE) {
+			fprintf(stderr,
+				"%s: Keep termios.\n",
+				p->Path
+			);
+		}
+	}
+
+	PortM202MD10BUpdateTimer(p, 0);
 
 	if (ch_wait_ms < 0) {
 		ch_wait_ms = 0;
@@ -309,10 +518,11 @@ int PortM202MD10BWrite(PortM202MD10B *p, const uint8_t *buf, ssize_t len)
 
 	if ((p->CharWait.tv_sec == 0) && (p->CharWait.tv_nsec == 0)) {
 		while (wlen < len) {
+			PortM202MD10BUpdateTimer(p, 0);
 			ret = write(p->Fd, buf, len);
 			if (ret < 0) {
-				fprintf(stderr, "%s: Can not write, %s(%d). len=%ld\n",
-					p->Path, strerror(errno), errno, (long)(len)
+				fprintf(stderr, "%s: Can not write, %s(%d). Fd=%d, len=%ld\n",
+					p->Path, strerror(errno), errno, p->Fd, (long)(len)
 				);
 				result = 0;
 				break;
@@ -331,11 +541,14 @@ int PortM202MD10BWrite(PortM202MD10B *p, const uint8_t *buf, ssize_t len)
 					zero_cntr = 0;
 				}
 			}
+
+			PortM202MD10BUpdateTimer(p, ret);
 			wlen += ret;
 			buf +=  ret;
 		}
 	} else {
 		while (wlen < len) {
+			PortM202MD10BUpdateTimer(p, 0);
 			ret = write(p->Fd, buf, 1);
 			if (ret < 0) {
 				fprintf(stderr, "%s: Can not write, %s(%d).\n",
@@ -359,13 +572,16 @@ int PortM202MD10BWrite(PortM202MD10B *p, const uint8_t *buf, ssize_t len)
 				}
 			}
 			if (nanosleep(&(p->CharWait), NULL)) {
-				fprintf(stderr, "%s: nanosleep(): %s(%d).\n",
+				fprintf(stderr, "%s: nanosleep(): CharWait=%lld.%.9ld, %s(%d).\n",
 					*(CLine.Argv0),
+					(long long)(p->CharWait.tv_sec), p->CharWait.tv_nsec,
 					strerror(errno), errno
 				);
 				result = 0;
 				break;
 			}
+
+			PortM202MD10BUpdateTimer(p, 1);
 			wlen++;
 			buf++;
 		}
@@ -373,8 +589,15 @@ int PortM202MD10BWrite(PortM202MD10B *p, const uint8_t *buf, ssize_t len)
 	return result;
 }
 
+#define	M202MD10B_BREAK_WAIT_MS	( (2 * 10 * 1000) / 2400)
+
 int PortM202MD10Break(PortM202MD10B *p)
 {	int	result = 1;
+	struct timespec	ts;
+
+	if (!PortM202MD10BWaitRemains(p)) {
+		result = 0;
+	}
 
 	if (tcsendbreak(p->Fd, 0)) {
 		fprintf(stderr, "%s: Can not send break, %s(%d).\n",
@@ -382,6 +605,17 @@ int PortM202MD10Break(PortM202MD10B *p)
 		);
 		result = 0;
 	}
+	ts.tv_sec = 0;
+	ts.tv_nsec = M202MD10B_BREAK_WAIT_MS * 1000 * 1000;
+	if (nanosleep(&ts, NULL)) {
+		fprintf(stderr, "%s.%s: nanosleep(): ts=%lld.%.9ld, %s(%d).\n",
+			*(CLine.Argv0), __func__,
+			(long long)(ts.tv_sec), ts.tv_nsec,
+			strerror(errno), errno
+		);
+		result = 0;
+	}
+
 	return result;
 }
 
@@ -402,7 +636,8 @@ const char *StrSkipToChar(const char *p, char c)
 }
 
 int CommandLineInit(CommandLine *cl, int argc, char **argv)
-{	cl->Argc0 = argc;
+{	cl->Debug = 0;
+	cl->Argc0 = argc;
 	cl->Argv0 = argv;
 	argc--;
 	argv++;
@@ -422,7 +657,6 @@ int CommandLineInit(CommandLine *cl, int argc, char **argv)
 	cl->AState = AS_OPT_AND_STR;
 	cl->Path = NULL;
 	cl->Baud =   M202MD10B_BAUD_DEF;
-	cl->stBaud = M202MD10B_BAUD_DEF_ST;
 	cl->RtsCts = 0;
 	cl->CWaitMs = 0;
 	if (!PortM202MD10BInit(&(cl->Port))) {
@@ -589,6 +823,7 @@ typedef enum {
 	M202MD10B_REVERSE_CURSOR =		0x18,
 	M202MD10B_DEFINE_CHAR =			0x1A,
 	M202MD10B_GOTO_POSITION =		0x1B,
+	M202MD10B_DEBUG = 0xF8,		/*!< Pseudo code */
 	M202MD10B_CWAITMS = 0xF9,	/*!< Pseudo code */
 	M202MD10B_RTSCTS = 0xFA,	/*!< Pseudo code */
 	M202MD10B_BAUD = 0xFB,		/*!< Pseudo code */
@@ -678,10 +913,13 @@ int CommandLineBright(CommandLine *cl, unsigned char send)
 				*(CLine.Argv0),
 				*(cl->Argv)
 			);
-			send = M202MD10B_BRIGHT_4 + (4 - val);
 			cl->Argc = cl->ArgcNextOpt;
 			cl->Argv = cl->ArgvNextOpt;
+			return 0;
 		}
+		send = M202MD10B_BRIGHT_4 + (4 - val);
+		cl->Argc = cl->ArgcNextOpt;
+		cl->Argv = cl->ArgvNextOpt;
 	}
 
 	if (cl->ParseOnly) {
@@ -806,11 +1044,11 @@ typedef	struct {
 } M202MD10BDefineChar;
 
 int CommandLineDefineChar(CommandLine *cl, unsigned char send_cmd)
-{	unsigned char	send[sizeof(M202MD10BDefineChar)];
+{	uint8_t		send[sizeof(M202MD10BDefineChar)];
 	const char	*p;
 	char		c;
 	unsigned long	d;
-	unsigned char	a;
+	uint8_t		a;
 	ssize_t		i;
 	ssize_t		seq;
 	int		result = 1;
@@ -825,19 +1063,24 @@ int CommandLineDefineChar(CommandLine *cl, unsigned char send_cmd)
 	while ((i < sizeof(send)) && (p) && ((c = *p) != 0)) {
 		d = DigitChar(c);
 		if (d > 0xf) {
-			send[i] = a;
-			i++;
-			a = 0;
+			if (seq >=0 ) {
+				send[i] = a;
+				i++;
+				a = 0;
+			}
 			seq = 0;
 		} else {
 			a <<= 0x4;
-			a += (unsigned char)d;
+			a += (uint8_t)d;
+			if (seq < 0) {
+				seq = 0;
+			}
 			seq++;
 			if (seq >= 2) {
 				send[i] = a;
 				i++;
 				a = 0;
-				seq = 0;
+				seq = -1;
 			}
 		}
 		p++;
@@ -931,7 +1174,7 @@ int CommandLineGotoPosition(CommandLine *cl, unsigned char send_cmd)
 		if (y < 0) {
 			y = M202MD10B_HEIGHT + y;
 		}
-		send[1] = (unsigned char)(x + y * M202MD10B_HEIGHT);
+		send[1] = (unsigned char)(x + y * M202MD10B_WIDTH);
 		break;
 	}
 	cl->Argc = cl->ArgcNextOpt;
@@ -987,8 +1230,8 @@ int CommandLineSendStdIn(CommandLine *cl, unsigned char send_cmd)
 	}
 
 	fd = fileno(stdin);
-	while ((result != 0) && ((len = read(fd, send, sc_page_size)) >= 0)) {
-		result = PortM202MD10BWrite(&(cl->Port), send, sizeof(len));
+	while ((result != 0) && ((len = read(fd, send, sc_page_size)) > 0)) {
+		result = PortM202MD10BWrite(&(cl->Port), send, len);
 	}
 	if (len < 0) {
 		fprintf(stderr, "%s: Can not read stdin, %s(%d).\n",
@@ -1088,14 +1331,27 @@ int CommandLineRtsCts(CommandLine *cl, unsigned char send_cmd)
 	return result;
 }
 
+int CommandLineDebug(CommandLine *cl, unsigned char send_cmd)
+{	cl->Debug |= CL_DEBUG_VERBOSE;
+	cl->Argc--;
+	cl->Argv++;
+	return 1;
+}
+
 int CommandLineHelp(CommandLine *cl, unsigned char send_cmd)
 {	cl->Argc--;
 	cl->Argv++;
 	fprintf(stdout,
-		"m202md10b [-R] [-a] [-b] [-c] [-d] [-h[N]] [-i[N]] [-j] [-l] [-m]\n"
+		"m202md10b [-F path] [-B baud] [-C [y|n]] [-W m] [\"message\"] [-R]\n"
+		"[-a] [-b] [-c] [-d] [-h[N]] [-i[N]] [-j] [-l] [-m]\n"
 		"[-q] [-r] [-s] [-t] [-u] [-v] [-w] [-x]\n"
 		"[-z c:l0:l1:l2:l3:l4:l5:l6] [-[ [i|x,y]]\n"
-		"[-B baud] [-C [y|n]] [-W m] [-F path]  [-H]\n"
+		"[-D] [-] [--] [-H]\n"
+		"-F path   Serial port device path.\n"
+		"-B baud   Set baud rate, baud = {1200, 2400(*), 4800, 9600}..\n"
+		"-C y|n    RTS-CTS mode, y: Enable, n: Disable(*).\n"
+		"-W m      Wait m milli second(s) per character.\n"
+		"\"message\" Send message to display.\n"
 		"-R     Hard Reset.               -q   Round Trip Mode.\n"
 		"-a     Bright 4 (Max).           -r   Scroll Mode.\n"
 		"-b     Bright 3.                 -s   Reset Blink and Show Cursor.\n"
@@ -1104,20 +1360,72 @@ int CommandLineHelp(CommandLine *cl, unsigned char send_cmd)
 		"-h[N]  Back cursor N step(s).    -v   Under Line Cursor.\n"
 		"-i[N]  Forward cursor N step(s). -w   Block Cursor.\n"
 		"-j     Clear All.                -x   Reverse Cursor.\n"
-		"-l     Clear All and Goto Home.\n"
-		"-m     Goto Home.\n"
+		"-l     Clear All and Goto home.\n"
+		"-m     Goto home.\n"
 		"-z c:L0:L1:L2:L3:L4:L5:L6 Define Character,\n"
 		"   c, and L0..L6 are based on hex.\n"
 		"-[ i|x,y  Goto Position i or (x, y).\n"
-		"-B baud   Set baud rate, baud = {1200, 2400(*), 4800, 9600}..\n"
-		"-C y|n    RTS-CTS mode, y: Enable, n: Disable(*).\n"
-		"-W m      Wait m milli second(s) per character.\n"
-		"-F path   Serial port device path.\n"
-		"-H        Help message.\n"
+		"-D        Debug mode.\n"
+		"-H        Help short option usage.\n"
+		"--help    Help long option usage.\n"
+		"-         Read from stdin and send to display\n"
+		"--        End option.\n"
 		"          (*) default."
 	);
 	return 0;
 }
+
+int CommandLineHelpLong(CommandLine *cl, unsigned char send_cmd)
+{	cl->Argc--;
+	cl->Argv++;
+	fprintf(stdout,
+		"m202md10b [--path=path] [--options[=parameter]] [\"message\"] [-] [--]\n"
+		/* 2345678901234567890123456789 */
+		"--path=device | --dev=device   Set device path.\n"
+		"--port=device                  Same as above.\n"
+		"--baud=b                       Set baud rate as b,\n"
+		"                                b = {1200, 2400(*), 4800, 9600}.\n"
+		"--rtscts={y|n}                 Set RTS-CTS flow control,\n"
+		"                                y = enable, n = disable(*).\n"
+		"--wait=m                       Wait m milli seconds every one byte sent.\n"
+		"--hard-reset | --break         Send break or reset VFD panel.\n"
+		"--bright=N                     Set bright N=[4..1], max to min.\n"
+		"--back[=N]                     Back N character.\n"
+		"--forward[=N]                  Forward N character.\n"
+		"--clear-all | --wipe           Clear all.\n"
+		"--clear-all-goto-home | --cls  Clear all and Goto home.\n"
+		"--goto-home | --home           Goto home.\n"
+		"--round-trip-mode | --round    Round trip mode.\n"
+		"--reset-blink-show-cursor      Reset blink and show cursor\n"
+		"--show                         Same as above.\n"
+		"--scroll-mode | --scroll       Scroll mode.\n"
+		"--hide-cursor | --hide         Hide cursor.\n"
+		"--blink-cursor | --blink       Blink cursor.\n"
+		"--under-line-cursor | --under  Under line cursor\n"
+		"--block-cursor | --block       Block cursor.\n"
+		"--reverse-cursor | --reverse   Reverse cursor.\n"
+		"--define-char=parameter        Define Character.\n"
+		"                                Parameter = c:L0:L1:L2:L3:L4:L5:L6.\n"
+		"                                c = Character code to define.\n"
+		"                                L0..L6 = Character bit map, Line 0 to 6.\n"
+		"                                Line 0 = top, Line 6 = bottom.\n"
+		"                                LSB = Left, MSB = Right, in 5 bits.\n"
+		"                                c, and L0..L6 are based on hex.\n"
+		"--define=parameter             Same as above.\n"
+		"--goto-position=c              Goto cursor to c | c = [0..39].\n"
+		"--goto-position=x,y            Goto cursor to x,y | x = [0..19], y=[0,1].\n"
+		"--goto=c                       Same as --goto-position.\n"
+		"--goto=x,y                     Same as --goto-position.\n"
+		"--debug                        Debug mode.\n"
+		"--help                         Print long help message.\n"
+		"-H                             Print short help message.\n"
+		"-                              Read from stdin and send to display.\n"
+		"--                             End option.\n"
+		"                               (*) default."
+	);
+	return 0;
+}
+
 
 #define	LMID_STR(s)	(sizeof(s) - 1), s
 
@@ -1160,7 +1468,8 @@ LongMatch LongMatchTable[] = {
 	{LMID_STR("wait"),			M202MD10B_CWAITMS,		CommandLineCWaitMs},
 	{LMID_STR("baud"),			M202MD10B_BAUD,			CommandLineBaud},
 	{LMID_STR("rtscts"),			M202MD10B_RTSCTS,		CommandLineRtsCts},
-	{LMID_STR("help"),			M202MD10B_HELP,			CommandLineHelp},
+	{LMID_STR("debug"),			M202MD10B_DEBUG,		CommandLineDebug},
+	{LMID_STR("help"),			M202MD10B_HELP,			CommandLineHelpLong},
 	{0, NULL, M202MD10B_HELP, CommandLineHelp},
 };
 
@@ -1195,6 +1504,7 @@ ShortMatch ShortMatchTable[] = {
 	{'C', M202MD10B_RTSCTS,			CommandLineRtsCts},
 	{'W', M202MD10B_CWAITMS,		CommandLineCWaitMs},
 	{'F', M202MD10B_PATH,			CommandLinePath},
+	{'D', M202MD10B_DEBUG,			CommandLineDebug},
 	{'H', M202MD10B_HELP,			CommandLineHelp},
 	{0,0, NULL},
 };
@@ -1323,6 +1633,15 @@ int CommandLineParse(CommandLine *cl)
 					result = 0;
 					goto done;
 				}
+				continue;
+			}
+			if ((cl->OptShort == NULL) && (cl->OptLong == NULL)) {
+				ret = CommandLineSendArg(cl, 0);
+				if (!ret) {
+					result = 0;
+					goto done;
+				}
+				break;
 			}
 			taken = 0;
 			ret = CommandLineParseShort(cl, &taken);
@@ -1340,6 +1659,7 @@ int CommandLineParse(CommandLine *cl)
 					}
 				}
 			}
+			break;
 		default:
 			fprintf(stderr,
 				"%s: %s: Internal state error. Argv=%s\n",
@@ -1375,10 +1695,9 @@ int MainB(CommandLine *cl)
 		return 0;
 	}
 
-	ret = PortM202MD10BOpen(&(cl->Port), cl->Path);
-	if (!ret) {
-		return 0;
-	}
+	fprintfDebug(stderr, "%s: Baud rate. Baud=%ld\n",
+		*(cl->Argv0), cl->Baud
+	);
 
 	stBaud = BaudToSpeedT(cl->Baud, &bvalid);
 	switch (stBaud) {
@@ -1392,10 +1711,15 @@ int MainB(CommandLine *cl)
 			*(cl->Argv0)
 		);
 		result = 0;
-		goto out_close;
+		goto out;
 	}
 
-	ret = PortM202MD10BConfig(&(cl->Port), stBaud, cl->RtsCts, cl->CWaitMs);
+	ret = PortM202MD10BOpen(&(cl->Port), cl->Path);
+	if (!ret) {
+		return 0;
+	}
+
+	ret = PortM202MD10BConfig(&(cl->Port), cl->Baud, cl->RtsCts, cl->CWaitMs);
 	if (!ret) {
 		result = 0;
 		goto out_close;
@@ -1413,6 +1737,7 @@ out_close:
 	if (!ret) {
 		result = 0;
 	}
+out:
 	return result;
 }
 
