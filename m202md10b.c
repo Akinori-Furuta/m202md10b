@@ -1,4 +1,6 @@
 #define _GNU_SOURCE
+#include <sys/ioctl.h>
+#include <stdint.h>
 #include <limits.h>
 #include <unistd.h>
 #include <fcntl.h>
