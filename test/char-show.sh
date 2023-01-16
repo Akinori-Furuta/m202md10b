@@ -7,7 +7,12 @@ MyWhich=$(which "${MyName}")
 MyPath=$(readlink -f "${MyWhich}")
 MyDir=$(dirname "${MyPath}")
 MyBase=$(basename "${MyPath}")
-Uuid=$(uuidgen)
+if which uuidgen
+then
+	Uuid=$(uuidgen)
+else
+	Uuid=$(uuid)
+fi
 
 function Help() {
 	echo "$0: m202md10b show characters script."

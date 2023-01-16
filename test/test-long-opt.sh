@@ -5,8 +5,13 @@ MyWhich=$(which "${MyName}")
 MyPath=$(readlink -f "${MyWhich}")
 MyDir=$(dirname "${MyPath}")
 MyBase=$(basename "${MyPath}")
-Uuid=$(uuidgen)
 
+if which uuidgen
+then
+	Uuid=$(uuidgen)
+else
+	Uuid=$(uuid)
+fi
 
 export LANG=C
 
