@@ -143,7 +143,7 @@ sleep 1
 i=0
 while (( ${i} < 20))
 do
-	seq 0x41 0x5a | gawk '{printf("%c", $1);}' | ./m202md10b "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
+	seq 0x41 0x5a | gawk '{printf("%c", $1);}' | ${M202MD10B} "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
 	i=$(( ${i} + 1 ))
 done
 sleep 1
@@ -155,7 +155,7 @@ sleep 1
 i=0
 while (( ${i} < 20))
 do
-	seq 0x41 0x5a | gawk '{printf("%c", $1);}' | ./m202md10b "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
+	seq 0x41 0x5a | gawk '{printf("%c", $1);}' | ${M202MD10B} "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
 	i=$(( ${i} + 1 ))
 done
 sleep 1
@@ -166,7 +166,7 @@ sleep 1
 i=0
 while (( ${i} < 20))
 do
-	seq 0x61 0x7a | gawk '{printf("%c", $1);}' | ./m202md10b "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
+	seq 0x61 0x7a | gawk '{printf("%c", $1);}' | ${M202MD10B} "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
 	i=$(( ${i} + 1 ))
 done
 sleep 1
@@ -178,7 +178,7 @@ sleep 1
 i=0
 while (( ${i} < 20))
 do
-	seq 0x61 0x7a | gawk '{printf("%c", $1);}' | ./m202md10b "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
+	seq 0x61 0x7a | gawk '{printf("%c", $1);}' | ${M202MD10B} "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} -
 	i=$(( ${i} + 1 ))
 done
 sleep 1
@@ -258,9 +258,9 @@ sleep 2
 
 
 # Define Character font
-./m202md10b -F "${Port}" --baud=${Baud} --rtscts=${RtsCts} --clear-all-goto-home "Define Character" --goto=0,1 "[" $'\x5c' "]"
+${M202MD10B} -F "${Port}" --baud=${Baud} --rtscts=${RtsCts} --clear-all-goto-home "Define Character" --goto=0,1 "[" $'\x5c' "]"
 sleep 1
-./m202md10b -F "${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=5c:00:01:02:04:08:10:00
+${M202MD10B} -F "${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=5c:00:01:02:04:08:10:00
 sleep 1
 
 i=0
@@ -268,13 +268,13 @@ while (( ${i} < 10 ))
 do
 	for c in  "|" "/" "-" $'\\'
 	do
-		echo -n "${c}" | ./m202md10b "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} - --back
+		echo -n "${c}" | ${M202MD10B} "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} - --back
 	done
 	i=$(( ${i} + 1 ))
 done
 
 # Define Character font on live
-./m202md10b "--port=${Port}" "--baud=${Baud}" "--rtscts=${RtsCts}" --goto-position=0,0 --round
+${M202MD10B} "--port=${Port}" "--baud=${Baud}" "--rtscts=${RtsCts}" --goto-position=0,0 --round
 (
 	i=0
 	while (( ${i} < 40 ))
@@ -282,7 +282,7 @@ done
 		echo -n $'\xfd'
 		i=$(( ${i} + 1 ))
 	done
-) | ./m202md10b "--dev=${Port}" "--baud=${Baud}" "--rtscts=${RtsCts}" -
+) | ${M202MD10B} "--dev=${Port}" "--baud=${Baud}" "--rtscts=${RtsCts}" -
 
 i=0
 while (( ${i} < 10 ))
@@ -296,7 +296,7 @@ do
 # 5*   *
 # 6  *  
 
-	./m202md10b "--path=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define-char=fd:04:0a:11:04:0a:11:04
+	${M202MD10B} "--path=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define-char=fd:04:0a:11:04:0a:11:04
 
 #  01234
 # 0 * * 
@@ -307,7 +307,7 @@ do
 # 5  *  
 # 6 * * 
 
-	./m202md10b "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=fd=0a-11-04-0a-11-04-0a
+	${M202MD10B} "--dev=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=fd=0a-11-04-0a-11-04-0a
 
 #  01234
 # 0*   *
@@ -318,11 +318,11 @@ do
 # 5 * * 
 # 6*   *
 
-	./m202md10b "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define-char=fd11040a11040a11
+	${M202MD10B} "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define-char=fd11040a11040a11
 	i=$(( ${i} + 1 ))
 done
 
-./m202md10b "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=fd=04.0A.11.04.0A.11.04
+${M202MD10B} "--port=${Port}" --baud=${Baud} --rtscts=${RtsCts} --define=fd=04.0A.11.04.0A.11.04
 
 sleep 2
 
