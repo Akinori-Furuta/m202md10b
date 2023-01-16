@@ -293,6 +293,7 @@ int PortM202MD10BClose(PortM202MD10B *p)
 		);
 		PortM202MD10BUpdateTimer(p, 0);
 		if (fsync(p->Fd) != 0) {
+#if (!defined(__linux__))
 			fprintf(stderr,
 				"%s: Can not flush. %s(%d).\n",
 				p->Path,
@@ -300,6 +301,7 @@ int PortM202MD10BClose(PortM202MD10B *p)
 				errno
 			);
 			ret = 0;
+#endif /* (!defined(__linux__)) */
 		}
 		if (!PortM202MD10BWaitRemains(p)) {
 			ret = 0;
