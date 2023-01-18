@@ -1,4 +1,9 @@
 #!/bin/bash
+# SPDX-License-Identifier: BSD-2-Clause
+# Futaba M202MD10B control application test script
+# Show characters
+#
+# Copyright (C) 2023 afuruta@m7.dion.ne.jp
 
 export LANG=C
 
