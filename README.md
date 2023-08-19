@@ -56,7 +56,7 @@ The FUTABA M202MD10B VFD panel requires following control signals,
 
 Add interface circuit to control these signals.
 [An example schematic "Futaba M202MD10B PC Interface
-Board"](file://circuit/M202MD10BIF2.pdf "M202MD10B interface circuit")
+Board"](circuit/M202MD10BIF2.pdf "M202MD10B interface circuit")
 implements following functions and connect to PC via USB-Serial interface.
 
 |Panel signal|Implimentation|
@@ -84,13 +84,13 @@ Set the DIP switch on M202MD10B as follows,
 
 There are test and demo scripts in the ${base}/test directory.
 These test scripts work with the circuit ["Futaba M202MD10B PC
-Interface Board"](file://circuit/M202MD10BIF2.pdf "M202MD10B
+Interface Board"](circuit/M202MD10BIF2.pdf "M202MD10B
 interface circuit") which is described previous section.
 
 ### Run Test and Demo Scripts
 
 Connect the M202MD10B to PC via the ["Futaba M202MD10B PC Interface
-Board"](file://circuit/M202MD10BIF2.pdf "M202MD10B interface circuit").
+Board"](circuit/M202MD10BIF2.pdf "M202MD10B interface circuit").
 And you check which node is the serial port connecting to the M202MD10B.
 The node path will be appeared as /dev/ttyN (on cygwin),
 /dev/ttyUSBn (on linux) or /dev/ttyACMn (on linux). _N_ or _n_ is the number of the port connected.
