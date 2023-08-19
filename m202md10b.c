@@ -1388,10 +1388,10 @@ int CommandLineHelpLong(CommandLine *cl, unsigned char send_cmd)
 {	cl->Argc--;
 	cl->Argv++;
 	fprintf(stdout,
-		"m202md10b [--path=path] [--options[=parameter]] [\"message\"] [-] [--]\n"
+		"m202md10b [--path=path] [--options[=parameter] | [\"message\"]]... [-] [--]\n"
 		/* 2345678901234567890123456789 */
-		"--path=device | --dev=device   Set device path.\n"
-		"--port=device                  Same as above.\n"
+		"--path=path | --dev=path       Set device path.\n"
+		"--port=path                    Same as above.\n"
 		"--baud=b                       Set baud rate as b,\n"
 		"                                b = {1200, 2400(*), 4800, 9600}.\n"
 		"--rtscts={y|n}                 Set RTS-CTS flow control,\n"
