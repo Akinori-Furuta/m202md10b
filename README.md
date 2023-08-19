@@ -56,8 +56,8 @@ The FUTABA M202MD10B VFD panel requires following control signals,
 
 Add interface circuit to control these signals.
 [An example schematic "Futaba M202MD10B PC Interface
-Board"](file:circuit/M202MD10BIF2.pdf "M202MD10B interface circuit")
-implements following function and connect to PC via USB-Serial interface.
+Board"](file://circuit/M202MD10BIF2.pdf "M202MD10B interface circuit")
+implements following functions and connect to PC via USB-Serial interface.
 
 |Panel signal|Implimentation|
 |:-----------|:-------------|
@@ -91,9 +91,9 @@ interface circuit") which is described previous section.
 
 Connect the M202MD10B to PC via the ["Futaba M202MD10B PC Interface
 Board"](file://circuit/M202MD10BIF2.pdf "M202MD10B interface circuit").
-And you see which node is the serial port connecting to the M202MD10B.
-The node path will be appeared as /dev/ttyN (on cygwin) or
-/dev/ttyUSBn (on linux). _N_ or _n_ is the number of the port connected.
+And you check which node is the serial port connecting to the M202MD10B.
+The node path will be appeared as /dev/ttyN (on cygwin),
+/dev/ttyUSBn (on linux) or /dev/ttyACMn (on linux). _N_ or _n_ is the number of the port connected.
 
 #### Display All Characters Demo
 
@@ -116,7 +116,7 @@ cd ${base}/test
 ./test-long-opt.sh -F /dev/ttyUSBn 
 ./test-short-opt.sh -F /dev/ttyUSBn 
 ```
-The test scripts shows the m202md10b application command line options,
+These test scripts show how the m202md10b application command line options works,
 |Script|Description|
 |:--|:--|
 |test-long-opt.sh |Shows long options to control display effects.|
@@ -141,9 +141,9 @@ Must specify serial port path by the option **--path=path** (in short format -F 
 
 Options and messages to control VFD and display characters are send to port in order. For example, command line "hello" -f 2 "world" sends "hello\x09\x09world" to port.
 
-Single dash '-' terminates parsing options, for example, command line "-" "-x" "-y" "--" sends "-x-y--" to serial port.
+Single dash '-' begin reading stdin and sends them to serial port. When reading from stdin ends (reached EOF), back to parsing command line.
 
-Double dash '--' terminates parsing option and message, then begin reading stdin and sends them to serial port.
+Double dash '--' terminates parsing options, for example, command line "--" "-x" "-y" "-" sends "-x-y-" to serial port.
 
 The following table shows command line options.
 
@@ -153,7 +153,7 @@ The following table shows command line options.
 |-F _path_|--path=_path_<br />--dev=_path_<br />--port=device |Set serial port device _path_.|
 |-B _baud_|--baud=_baud_|Set baud rate.<br />baud = {1200, 2400<sup>(*)</sup>, 4800, 9600} |
 |-C {y\|n}|--rts-cts={y\|n}|Set RTS-CTS flow control mode.<br />y: Enable, n: Disable<sup>(*)</sup>|
-|-W _msec_|--wait=_msec_|Wait _msec_ milli second(s) per character. If you saw some characters are not shown on display, specify this option and increase parameter value.|
+|-W _msec_|--wait=_msec_|Wait _msec_ milli second(s) per character. If you saw some characters are not shown on the panel display, specify this option and increase parameter value.|
 |-R|--hard-reset<br />--break|Send hard reset (send break).|
 |-a|--bright=4|Set bright level 4 (Max).|
 |-b|--bright=3|Set bright level 3.|
@@ -175,7 +175,8 @@ The following table shows command line options.
 |-z _c_:_L0_:_L1_:_L2_:_L3_:_L4_:_L5_:_L6_|--define-char=_parameter_<br />--define=_parameter_|Define character _c_ bitmap as _L0_ to _L6_. _L0_ is top most, _L6_ is bottom most. LSB corresponds to left most pixel. _L0_.._L6_ are based on hex.<br />NOTE: The _parameter_ to long format option is same as short format option.|
 |-[ _c_ \| _x,y_|--goto-position=_parameter_<br />--goto=_parameter_|Goto cursor position to _c_ or (_x_, _y_). _c_ = 0..39, _x_ = 0..19, _y_ = 0..1, The "Left Top" position is 0 or (0, 0). The "Right Bottom" position is 39 or (19, 1). NOTE: The _parameter_ to long format option is same as short format option.|
 |-D|--debug|Debug mode|
-|-H|--help|Help short option usage|
+|-H||Help short option usage|
+||--help|Help long option usage|
 |-||Read from stdin and send to display|
 |--||End option.|
 (*): Default value.
