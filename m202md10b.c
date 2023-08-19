@@ -169,7 +169,7 @@ BaudSppedTMap BaudSppedTTable[] = {
 	{2000000, B2000000},
 	{2500000, B2500000},
 	{3000000, B3000000},
-	/* Some OS and Seral port may have more higer speed. */
+	/* Some OSes and Seral ports may have more higer speed. */
 	{     -1,       B0},
 };
 
