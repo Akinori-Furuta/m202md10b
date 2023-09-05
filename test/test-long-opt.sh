@@ -11,7 +11,7 @@ MyPath=$(readlink -f "${MyWhich}")
 MyDir=$(dirname "${MyPath}")
 MyBase=$(basename "${MyPath}")
 
-if which uuidgen
+if which uuidgen > /dev/null
 then
 	Uuid=$(uuidgen)
 else
